@@ -12,9 +12,9 @@ from dataloader.Affectnet_test_loader import Affectnet_test_aligned
 from torch.optim import lr_scheduler
 import torch.optim as optim
 import time
-from lfw_eval import parseList, evaluation_10_fold
 import numpy as np
 import scipy.io
+from sklearn.metrics import accuracy_score
 
 # gpu init
 gpu_list = ''
@@ -109,15 +109,15 @@ for epoch in range(start_epoch, TOTAL_EPOCH+1):
         raw_logits = net(img)
 
         # output = ArcMargin(raw_logits, label)
-        print(raw_logits)
-        print(label)
+        # print(raw_logits)
+        # print(label)
         total_loss = criterion(raw_logits, label)
 
         total_loss.backward()
         optimizer_ft.step()
-        print(total_loss)
+        # print(total_loss)
 
-        print(train_total_loss)
+        # print(train_total_loss)
         train_total_loss += total_loss.item() * batch_size
         total += batch_size
 
@@ -127,32 +127,50 @@ for epoch in range(start_epoch, TOTAL_EPOCH+1):
         .format(train_total_loss, time_elapsed // 60, time_elapsed % 60)
     _print(loss_msg)
 
-    # test model on lfw
+    # # test model on lfw
     if epoch % TEST_FREQ == 0:
         net.eval()
         featureLs = None
         featureRs = None
         _print('Test Epoch: {} ...'.format(epoch))
+        ma = []
         for data in testloader:
-            for i in range(len(data)):
-                data[i] = data[i].cuda()
-            res = [net(d).data.cpu().numpy() for d in data]
-            featureL = np.concatenate((res[0], res[1]), 1)
-            featureR = np.concatenate((res[2], res[3]), 1)
-            if featureLs is None:
-                featureLs = featureL
-            else:
-                featureLs = np.concatenate((featureLs, featureL), 0)
-            if featureRs is None:
-                featureRs = featureR
-            else:
-                featureRs = np.concatenate((featureRs, featureR), 0)
+            img, label = data[0].cuda(), data[1].cuda()
+            batch_size = img.size(0)
+            raw_logits = net(img)
+            
+            pred = []
+            for l in raw_logits.cpu().detach().numpy():
+                m = max(l)
+                for i in range(len(l)):
+                    if l[i] == m:
+                        pred.append(i)
+                        break
+            print(pred)
+            print('Accuracy: ', accuracy_score(label.cpu().detach().numpy(), pred))
+            ma.append(accuracy_score(label.cpu().detach().numpy(), pred))
+        print('Mean accuracy:', np.mean(ma))
 
-        result = {'fl': featureLs, 'fr': featureRs, 'fold': folds, 'flag': flags}
-        # save tmp_result
-        scipy.io.savemat('./result/tmp_result.mat', result)
-        accs = evaluation_10_fold('./result/tmp_result.mat')
-        _print('    ave: {:.4f}'.format(np.mean(accs) * 100))
+            # for i in range(len(data)):
+            #     data[i] = data[i].cuda()
+
+        #     res = [net(d).data.cpu().numpy() for d in data]
+        #     featureL = np.concatenate((res[0], res[1]), 1)
+        #     featureR = np.concatenate((res[2], res[3]), 1)
+        #     if featureLs is None:
+        #         featureLs = featureL
+        #     else:
+        #         featureLs = np.concatenate((featureLs, featureL), 0)
+        #     if featureRs is None:
+        #         featureRs = featureR
+        #     else:
+        #         featureRs = np.concatenate((featureRs, featureR), 0)
+
+        # result = {'fl': featureLs, 'fr': featureRs, 'fold': folds, 'flag': flags}
+        # # save tmp_result
+        # scipy.io.savemat('./result/tmp_result.mat', result)
+        # accs = evaluation_10_fold('./result/tmp_result.mat')
+        # _print('    ave: {:.4f}'.format(np.mean(accs) * 100))
 
     # save model
     if epoch % SAVE_FREQ == 0:

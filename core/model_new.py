@@ -70,6 +70,7 @@ class MobileFacenet(nn.Module):
         self.conv4 = ConvBlock(512, 128, 1,1,0)
         self.dense1 = nn.Linear(6272,512)
         self.dense2 = nn.Linear(512,7)
+        self.smax = nn.Softmax()
 
     def forward(self, x):
         x = self.conv1(x)
@@ -86,6 +87,7 @@ class MobileFacenet(nn.Module):
         x = x.view(x.size(0), -1)
         x = self.dense1(x)
         x = self.dense2(x)
+        x = self.smax(x)
         
         return x
 
