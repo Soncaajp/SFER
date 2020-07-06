@@ -18,184 +18,192 @@ from sklearn.metrics import accuracy_score
 from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms
 
+def get_emotions(arr, num):
+    l = []
+    for i in arr:
+        l.append(i[num])
+    print(l)
+    return torch.Tensor(l)
 
+def count_loss(raw_logits, label):
+    loss = 0
+    weights_for_loss = [0.26373185113172853,
+                    0.47345915139731315,
+                    0.0896753104944664,
+                    0.04962980183302689,
+                    0.022465498657987616,
+                    0.013395467450035576,
+                    0.0876429190354418]
 
-# def count_loss(raw_logits, label):
-#     loss = 0
-#     weights_for_loss = [0.26373185113172853,
-#                     0.47345915139731315,
-#                     0.0896753104944664,
-#                     0.04962980183302689,
-#                     0.022465498657987616,
-#                     0.013395467450035576,
-#                     0.0876429190354418]
-#     for i in range(raw_logits.shape[1]):
-#         loss += weights_for_loss[i]*nn.BCELoss(raw_logits[:,i], label[:,i])
-#     return loss
+    print(nn.BCELoss(get_emotions(raw_logits,0), get_emotions(label,0)))
+    # for i in range(7):
+    #     loss += weights_for_loss[i]*nn.BCELoss(get_emotions(raw_logits,i), get_emotions(label,i))
+    return loss
 
 def aug(p=0.5):
     return transforms.Compose([
     transforms.ToPILImage(), 
     transforms.RandomHorizontalFlip(p = p),
-    transforms.ToTensor()
+    transforms.RandomGrayscale(),
+    transforms.ColorJitter(brightness=0, contrast=0, saturation=0, hue=0)
 ])
 
 
 # writer = SummaryWriter()
 
-# # gpu init
-# gpu_list = ''
-# multi_gpus = False
-# if isinstance(GPU, int):
-#     gpu_list = str(GPU)
-# else:
-#     multi_gpus = True
-#     for i, gpu_id in enumerate(GPU):
-#         gpu_list += str(gpu_id)
-#         if i != len(GPU) - 1:
-#             gpu_list += ','
-# os.environ['CUDA_VISIBLE_DEVICES'] = gpu_list
+# gpu init
+gpu_list = ''
+multi_gpus = False
+if isinstance(GPU, int):
+    gpu_list = str(GPU)
+else:
+    multi_gpus = True
+    for i, gpu_id in enumerate(GPU):
+        gpu_list += str(gpu_id)
+        if i != len(GPU) - 1:
+            gpu_list += ','
+os.environ['CUDA_VISIBLE_DEVICES'] = gpu_list
 
-# # other init
-# start_epoch = 1
-# save_dir = os.path.join(SAVE_DIR, MODEL_PRE + 'v2_' + datetime.now().strftime('%Y%m%d_%H%M%S'))
-# if os.path.exists(save_dir):
-#     raise NameError('model dir exists!')
-# os.makedirs(save_dir)
-# logging = init_log(save_dir)
-# _print = logging.info
+# other init
+start_epoch = 1
+save_dir = os.path.join(SAVE_DIR, MODEL_PRE + 'v2_' + datetime.now().strftime('%Y%m%d_%H%M%S'))
+if os.path.exists(save_dir):
+    raise NameError('model dir exists!')
+os.makedirs(save_dir)
+logging = init_log(save_dir)
+_print = logging.info
 
 
 # define trainloader and testloader
 
 
-trainset = Affectnet_aligned(transform = aug())
+trainset = Affectnet_aligned()#transform = aug())
 trainloader = torch.utils.data.DataLoader(trainset, batch_size=BATCH_SIZE,
                                           shuffle=True, num_workers=8, drop_last=False)
-for data in trainloader:
-    img, label = data[0].cuda(), data[1].cuda()
-    print(label)
 
-    true_label = []
-    for i in label.cpu().detach():
-        l = []
-        for j in range(7):
-            if i == j:
-                l.append(1)
-            else:
-                l.append(0)
-        true_label.append(l)
-    print(true_label[:,0])
+testdataset = Affectnet_test_aligned()
+testloader = torch.utils.data.DataLoader(testdataset, batch_size=32,
+                                         shuffle=False, num_workers=8, drop_last=False)
+
+# define model
+net = model_new.MobileFacenet()
+# ArcMargin = model.ArcMarginProduct(128, trainset.class_nums)
+
+if RESUME:
+    ckpt = torch.load(RESUME)
+    net.load_state_dict(ckpt['net_state_dict'])
+    start_epoch = ckpt['epoch'] + 1
+
+
+# define optimizers
+ignored_params = list(map(id, net.dense1.parameters()))
+prelu_params_id = []
+prelu_params = []
+for m in net.modules():
+    if isinstance(m, nn.PReLU):
+        ignored_params += list(map(id, m.parameters()))
+        prelu_params += m.parameters()
+base_params = filter(lambda p: id(p) not in ignored_params, net.parameters())
+
+optimizer_ft = optim.SGD([
+    {'params': base_params, 'weight_decay': 4e-5},
+    {'params': net.dense1.parameters(), 'weight_decay': 4e-4},
+    #{'params': ArcMargin.weight, 'weight_decay': 4e-4},
+    {'params': prelu_params, 'weight_decay': 0.0}
+], lr=0.1, momentum=0.9, nesterov=True)
+
+exp_lr_scheduler = lr_scheduler.MultiStepLR(optimizer_ft, milestones=[36, 52, 58], gamma=0.1)
+
+
+net = net.cuda()
+if multi_gpus:
+    net = DataParallel(net)
+
+
+best_acc = 0.0
+best_epoch = 0
+for epoch in range(start_epoch, TOTAL_EPOCH+1):
+    exp_lr_scheduler.step()
+    # train model
+    _print('Train Epoch: {}/{} ...'.format(epoch, TOTAL_EPOCH))
+    net.train()
+
+    train_total_loss = 0.0
+    total = 0
+    since = time.time()
+    for data in trainloader:
+        img, label = data[0].cuda(), data[1].cuda()
+        print(img.shape)
+        batch_size = img.size(0)
+        optimizer_ft.zero_grad()
+
+        raw_logits = net(img)
+
+        true_label = []
+        for i in label.cpu().detach():
+            l = []
+            for j in range(7):
+                if i == j:
+                    l.append(1)
+                else:
+                    l.append(0)
+            true_label.append(l)
+        true_raw_logits = []
+        for i in raw_logits.cpu().detach().numpy():
+            l = []
+            for j in range(7):
+                l.append(i[j])
+            true_raw_logits.append(l)
+
+        total_loss = count_loss(true_raw_logits, true_label)
+        total_loss.backward()
+        optimizer_ft.step()
+        train_total_loss += total_loss * batch_size
+        writer.add_scalar('Loss/train', train_total_loss, epoch)
+        total += batch_size
+        break
     break
 
-# testdataset = Affectnet_test_aligned()
-# testloader = torch.utils.data.DataLoader(testdataset, batch_size=32,
-#                                          shuffle=False, num_workers=8, drop_last=False)
+    train_total_loss = train_total_loss / total
+    time_elapsed = time.time() - since
+    loss_msg = '    total_loss: {:.4f} time: {:.0f}m {:.0f}s'\
+        .format(train_total_loss, time_elapsed // 60, time_elapsed % 60)
+    _print(loss_msg)
 
-# # define model
-# net = model_new.MobileFacenet()
-# # ArcMargin = model.ArcMarginProduct(128, trainset.class_nums)
-
-# if RESUME:
-#     ckpt = torch.load(RESUME)
-#     net.load_state_dict(ckpt['net_state_dict'])
-#     start_epoch = ckpt['epoch'] + 1
-
-
-# # define optimizers
-# ignored_params = list(map(id, net.dense2.parameters()))
-# prelu_params_id = []
-# prelu_params = []
-# for m in net.modules():
-#     if isinstance(m, nn.PReLU):
-#         ignored_params += list(map(id, m.parameters()))
-#         prelu_params += m.parameters()
-# base_params = filter(lambda p: id(p) not in ignored_params, net.parameters())
-
-# optimizer_ft = optim.SGD([
-#     {'params': base_params, 'weight_decay': 4e-5},
-#     {'params': net.dense1.parameters(), 'weight_decay': 4e-4},
-#     #{'params': ArcMargin.weight, 'weight_decay': 4e-4},
-#     {'params': prelu_params, 'weight_decay': 0.0}
-# ], lr=0.1, momentum=0.9, nesterov=True)
-
-# exp_lr_scheduler = lr_scheduler.MultiStepLR(optimizer_ft, milestones=[36, 52, 58], gamma=0.1)
-
-
-# net = net.cuda()
-# if multi_gpus:
-#     net = DataParallel(net)
-
-
-# best_acc = 0.0
-# best_epoch = 0
-# for epoch in range(start_epoch, TOTAL_EPOCH+1):
-#     exp_lr_scheduler.step()
-#     # train model
-#     _print('Train Epoch: {}/{} ...'.format(epoch, TOTAL_EPOCH))
-#     net.train()
-
-#     train_total_loss = 0.0
-#     total = 0
-#     since = time.time()
-#     for data in trainloader:
-#         img, label = data[0].cuda(), data[1].cuda()
-#         batch_size = img.size(0)
-#         optimizer_ft.zero_grad()
-
-#         raw_logits = net(img)
-
-#         total_loss = count_loss(raw_logits, label)
-
-#         total_loss.backward()
-#         optimizer_ft.step()
-#         # print(total_loss)
-
-#         # print(train_total_loss)
-#         train_total_loss += total_loss * batch_size
-#         writer.add_scalar('Loss/train', train_total_loss, epoch)
-#         total += batch_size
-
-#     train_total_loss = train_total_loss / total
-#     time_elapsed = time.time() - since
-#     loss_msg = '    total_loss: {:.4f} time: {:.0f}m {:.0f}s'\
-#         .format(train_total_loss, time_elapsed // 60, time_elapsed % 60)
-#     _print(loss_msg)
-
-#     # # test model on Affectnet validation set
-#     if epoch % TEST_FREQ == 0:
-#         net.eval()
-#         _print('Test Epoch: {} ...'.format(epoch))
-#         ma = []
-#         for data in testloader:
-#             img, label = data[0].cuda(), data[1].cuda()
-#             batch_size = img.size(0)
-#             raw_logits = net(img)
+    # # test model on Affectnet validation set
+    if epoch % TEST_FREQ == 0:
+        net.eval()
+        _print('Test Epoch: {} ...'.format(epoch))
+        ma = []
+        for data in testloader:
+            img, label = data[0].cuda(), data[1].cuda()
+            batch_size = img.size(0)
+            raw_logits = net(img)
             
-#             test_loss = count_loss(raw_logits, label)
-#             writer.add_scalar('Loss/test', test_loss, epoch)
-#             pred = []
-#             for l in raw_logits.cpu().detach().numpy():
-#                 m = max(l)
-#                 for i in range(len(l)):
-#                     if l[i] == m:
-#                         pred.append(i)
-#                         break
-#             ma.append(accuracy_score(label.cpu().detach().numpy(), pred))
-#         writer.add_scalar('Accuracy/test', np.mean(ma), epoch)
+            test_loss = count_loss(raw_logits, label)
+            writer.add_scalar('Loss/test', test_loss, epoch)
+            pred = []
+            for l in raw_logits.cpu().detach().numpy():
+                m = max(l)
+                for i in range(len(l)):
+                    if l[i] == m:
+                        pred.append(i)
+                        break
+            ma.append(accuracy_score(label.cpu().detach().numpy(), pred))
+        writer.add_scalar('Accuracy/test', np.mean(ma), epoch)
 
-#     # save model
-#     if epoch % SAVE_FREQ == 0:
-#         msg = 'Saving checkpoint: {}'.format(epoch)
-#         _print(msg)
-#         if multi_gpus:
-#             net_state_dict = net.module.state_dict()
-#         else:
-#             net_state_dict = net.state_dict()
-#         if not os.path.exists(save_dir):
-#             os.mkdir(save_dir)
-#         torch.save({
-#             'epoch': epoch,
-#             'net_state_dict': net_state_dict},
-#             os.path.join(save_dir, '%03d.ckpt' % epoch))
-# print('finishing training')
+    # save model
+    if epoch % SAVE_FREQ == 0:
+        msg = 'Saving checkpoint: {}'.format(epoch)
+        _print(msg)
+        if multi_gpus:
+            net_state_dict = net.module.state_dict()
+        else:
+            net_state_dict = net.state_dict()
+        if not os.path.exists(save_dir):
+            os.mkdir(save_dir)
+        torch.save({
+            'epoch': epoch,
+            'net_state_dict': net_state_dict},
+            os.path.join(save_dir, '%03d.ckpt' % epoch))
+print('finishing training')

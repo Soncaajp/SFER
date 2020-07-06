@@ -29,12 +29,11 @@ class Affectnet_aligned(object):
         img_path = self.image_list[index]
         target = self.label_list[index]
         img = cv2.imread(img_path)
-
-        img = np.moveaxis(img, -1, 0) / 255.
+        img = np.moveaxis(img, -1, 0)
+        # print(img.shape)
         if self.transform:
             img = self.transform(img)
         img = torch.from_numpy(img).float()
-
         return img, target
 
     def __len__(self):
