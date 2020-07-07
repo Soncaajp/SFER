@@ -14,8 +14,6 @@ class Affectnet_aligned(object):
         image_list = []
         label_list = []
         for index, row in training_csv.iterrows():
-            if index == 1000:
-                break
             if row['expression'] < 7 and row['subDirectory_filePath'].split('/')[1] in os.listdir(src_images+row['subDirectory_filePath'].split('/')[0]):
                 image_list.append(src_images+row['subDirectory_filePath'])
                 label_list.append(int(row['expression']))
@@ -30,9 +28,10 @@ class Affectnet_aligned(object):
         target = self.label_list[index]
         img = cv2.imread(img_path)
         img = np.moveaxis(img, -1, 0)
-        # print(img.shape)
+
         if self.transform:
             img = self.transform(img)
+            
         img = torch.from_numpy(img).float()
         return img, target
 
