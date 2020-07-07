@@ -4,6 +4,9 @@ import os
 import pandas as pd
 import torch
 import cv2
+import matplotlib.pyplot as plt
+
+
 
 class Affectnet_aligned(object):
     def __init__(self, transform = None):
@@ -31,7 +34,7 @@ class Affectnet_aligned(object):
 
         if self.transform:
             img = self.transform(img)
-            
+        img = img / 255.
         img = torch.from_numpy(img).float()
         return img, target
 
@@ -46,3 +49,4 @@ if __name__ == '__main__':
     print(len(dataset))
     for data in trainloader:
         print(data[0].shape)
+        print(data[1])

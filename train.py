@@ -4,7 +4,6 @@ from torch import nn
 from torch.nn import DataParallel
 from datetime import datetime
 from config import BATCH_SIZE, SAVE_FREQ, RESUME, SAVE_DIR, TEST_FREQ, TOTAL_EPOCH, MODEL_PRE, GPU
-from config import CASIA_DATA_DIR, LFW_DATA_DIR
 from core import model_new
 from core.utils import init_log
 from dataloader.Affectnet_loader import Affectnet_aligned
@@ -116,6 +115,7 @@ criterion = nn.CrossEntropyLoss(weight=class_weights)
 
 best_acc = 0.0
 best_epoch = 0
+index = 1
 for epoch in range(start_epoch, TOTAL_EPOCH+1):
     exp_lr_scheduler.step()
     # train model
@@ -131,7 +131,6 @@ for epoch in range(start_epoch, TOTAL_EPOCH+1):
         optimizer_ft.zero_grad()
 
         raw_logits = net(img)
-
         # true_label = []
         # for i in label.cpu().detach():
         #     l = []
@@ -141,20 +140,22 @@ for epoch in range(start_epoch, TOTAL_EPOCH+1):
         #         else:
         #             l.append(0)
         #     true_label.append(l)
+        # true_label = torch.LongTensor(true_label).cuda()
         # true_raw_logits = []
         # for i in raw_logits.cpu().detach().numpy():
         #     l = []
         #     for j in range(7):
         #         l.append(i[j])
         #     true_raw_logits.append(l)
-
-        
         total_loss = criterion(raw_logits,label)
         total_loss.backward()
         optimizer_ft.step()
         train_total_loss += total_loss * batch_size
         total += batch_size
+        writer.add_scalar('Loss/epoch', train_total_loss, index)
+        index += 1
     writer.add_scalar('Loss/train', train_total_loss, epoch)
+
 
     train_total_loss = train_total_loss / total
     time_elapsed = time.time() - since
@@ -198,7 +199,6 @@ for epoch in range(start_epoch, TOTAL_EPOCH+1):
                         pred.append(i)
                         break
             ma.append(accuracy_score(label.cpu().detach().numpy(), pred))
-            print(pred)
         writer.add_scalar('Loss/test', test_loss, epoch)
         writer.add_scalar('Accuracy/test', np.mean(ma), epoch)
 

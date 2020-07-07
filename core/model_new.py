@@ -91,6 +91,35 @@ class MobileFacenet(nn.Module):
         
         return x
 
+def model_summary(model):
+  print("model_summary")
+  print()
+  print("Layer_name"+"\t"*7+"Number of Parameters")
+  print("="*100)
+  model_parameters = [layer for layer in model.parameters() if layer.requires_grad]
+  layer_name = [child for child in model.children()]
+  j = 0
+  total_params = 0
+  print("\t"*10)
+  for i in layer_name:
+    print()
+    param = 0
+    try:
+      bias = (i.bias is not None)
+    except:
+      bias = False  
+    if not bias:
+      param =model_parameters[j].numel()+model_parameters[j+1].numel()
+      j = j+2
+    else:
+      param =model_parameters[j].numel()
+      j = j+1
+    print(str(i)+"\t"*3+str(param))
+    total_params+=param
+  print("="*100)
+  print(f"Total Params:{total_params}")       
+
+
 if __name__ == "__main__":
     input = Variable(torch.FloatTensor(1, 3, 112, 112))
     net = MobileFacenet()
@@ -107,4 +136,13 @@ if __name__ == "__main__":
     print(net)
     x = net(input)
     print(x.shape)
-    print(x)
+
+    ignored_params = list(map(id, net.dense1.parameters()))
+    prelu_params_id = []
+    prelu_params = []
+    for m in net.modules():
+        if isinstance(m, nn.PReLU):
+            ignored_params += list(map(id, m.parameters()))
+            prelu_params += m.parameters()
+    base_params = filter(lambda p: id(p) not in ignored_params, net.parameters())
+    print(base_params)
